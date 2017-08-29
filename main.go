@@ -4,23 +4,29 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/fatih/color"
 
-	cli "gopkg.in/urfave/cli.v2"
+	cli "github.com/OneOfOne/cli"
 )
 
 var (
-	boldAt       = color.New(color.Bold, color.FgBlue).Sprint("@")
-	boldBlueStar = color.New(color.Bold, color.FgBlue).Sprint("*")
+	boldAt         = color.New(color.Bold, color.FgBlue).Sprint("@")
+	boldBlueStar   = color.New(color.Bold, color.FgBlue).Sprint("*")
+	boldYellowStar = color.New(color.Bold, color.FgYellow).Sprint("*")
+	boldRedStar    = color.New(color.Bold, color.FgRed).Sprint("*")
+	bold           = color.New(color.Bold).Sprint
+
+	verbose bool
+	gitPath string
 
 	app = cli.App{
-		Name:    "git-go-dep",
+		Name:    "git-go-vendor",
 		Version: "v0.1",
 		Commands: []*cli.Command{
 			{
@@ -44,7 +50,6 @@ var (
 				Action: addSubModule,
 			},
 			{
-				// TODO
 				Name:    "update",
 				Aliases: []string{"up"},
 				Usage:   "updates a vendored package or all of them if non is specified.",
@@ -57,15 +62,33 @@ var (
 				Action:  rmSubModule,
 			},
 		},
-		Action: func(c *cli.Context) (err error) {
-			return listSubModules(c)
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:        "verbose",
+				Aliases:     []string{"v"},
+				Destination: &verbose,
+			},
+			&cli.StringFlag{
+				Name:        "git-path",
+				Aliases:     []string{"git"},
+				Value:       "git",
+				Destination: &gitPath,
+			},
 		},
+		Action: cli.DefaultCommand("list"),
 	}
 )
 
 func main() {
 	log.SetFlags(log.Lshortfile)
-	app.Run(os.Args)
+	cli.VersionFlag = &cli.BoolFlag{
+		Name:    "version",
+		Aliases: []string{"V"},
+		Usage:   "print the version",
+	}
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func addSubModule(c *cli.Context) (err error) {
@@ -102,27 +125,53 @@ func addSubModule(c *cli.Context) (err error) {
 		alias = alias[:len(alias)-3]
 	}
 
-	if _, err = runCmd("git", "submodule", "add", "--force", path, alias); err != nil {
+	if _, err = runCmd(gitPath, "submodule", "add", "--depth", "1", "--force", path, alias); err != nil {
 		return cli.Exit(err, 2)
 	}
 
+	// TODO:
+	// if _, err = runCmd(gitPath, "config", "-f", ".gitmodules", "submodule."+path+".shallow", "true"); err != nil {
+	// 	return cli.Exit(err, 2)
+	// }
+
 	if branch == commit {
-		_, err = runCmd("git", "-C", alias, "checkout", "-t", "-B", branch, commit)
+		_, err = runCmd(gitPath, "-C", alias, "checkout", "-t", "-B", branch, commit)
 	} else {
-		_, err = runCmd("git", "-C", alias, "checkout", commit)
+		_, err = runCmd(gitPath, "-C", alias, "checkout", commit)
 	}
 	if err != nil {
 		return cli.Exit(err, 2)
 	}
 
 	// 	fmt.Printf("%s Successfully vendored %s as %s %s %s.\n", boldBlueStar, path, alias, boldAt, commit)
-	printRepo(alias, "")
+	if s := repoString(alias, ""); s != "" {
+		printf("%s %s.", bold("Added"), s)
+	}
 	return
 }
 
 func upSubModule(c *cli.Context) error {
-	log.Println("x")
-	return io.EOF
+	sms := c.Args().Slice()
+	if len(sms) == 0 {
+		sms = allSubModules()
+	}
+	for _, sm := range sms {
+		if !strings.HasPrefix(sm, "vendor/") {
+			sm = "vendor/" + sm
+		}
+		if _, err := runCmd(gitPath, "-C", sm, "pull", "--prune"); err != nil {
+			if strings.Contains(err.Error(), "not currently on a branch") {
+				errPrintf("%s %s, not on a branch.", bold("Skipping"), sm[7:])
+				continue
+			} else {
+				return cli.Exit(sm+" git pull failed: "+err.Error(), 2)
+			}
+		}
+		if s := repoString(sm, ""); s != "" {
+			printf("%s %s.", bold("Updated"), s)
+		}
+	}
+	return nil
 }
 
 func rmSubModule(c *cli.Context) error {
@@ -136,42 +185,61 @@ func rmSubModule(c *cli.Context) error {
 		alias = "vendor/" + alias
 	}
 
-	if _, err := runCmd("git", "submodule", "deinit", "--force", alias); err != nil {
-		log.Printf("%s", err)
-		return err
-	}
-
-	if _, err := runCmd("git", "rm", "--force", alias); err != nil {
+	if _, err := runCmd(gitPath, "submodule", "deinit", "--force", alias); err != nil {
 		return cli.Exit(err, 2)
 	}
 
-	fmt.Printf("%s Successfully removed %s.\n", boldBlueStar, alias)
+	if _, err := runCmd(gitPath, "rm", "--force", alias); err != nil {
+		return cli.Exit(err, 2)
+	}
+
+	// debug
+	if err := os.RemoveAll(filepath.Join(".git/modules/", alias)); err != nil {
+		return cli.Exit(err, 3)
+	}
+
+	if st, err := os.Stat(".gitmodules"); err == nil && st.Size() == 0 {
+		if err := os.Remove(".gitmodules"); err != nil {
+			return cli.Exit(err, 3)
+		}
+	}
+
+	printf("%s %s.", bold("Removed"), alias)
 	return nil
 }
 
 func listSubModules(c *cli.Context) error {
-	out, err := runCmd("git", "submodule", "status", "--recursive", "vendor/")
-	if err != nil {
-		return cli.Exit(err, 2)
-	}
-	for _, l := range out {
-		p := strings.Split(l, " ")
-		printRepo(p[1], p[0])
+	for _, sm := range allSubModules() {
+		if s := repoString(sm, ""); s != "" {
+			printf("%s", s)
+		}
 	}
 	return nil
 }
 
+func allSubModules() (sms []string) {
+	out, err := runCmd(gitPath, "submodule", "status", "--recursive", "vendor/")
+	if err != nil {
+		return nil
+	}
+	for _, l := range out {
+		p := strings.Split(l, " ")
+		sms = append(sms, p[1])
+	}
+	return
+}
+
 func submoduleURL(path string) string {
-	if out, _ := runCmd("git", "config", "submodule."+path+".url"); len(out) == 1 {
+	if out, _ := runCmd(gitPath, "config", "submodule."+path+".url"); len(out) == 1 {
 		return out[0]
 	}
 	return ""
 }
 
-func printRepo(path, hash string) {
+func repoString(path, hash string) string {
 	addr := submoduleURL(path)
 	if addr == "" {
-		return
+		return ""
 	}
 
 	if idx := strings.Index(addr, "://"); idx > -1 {
@@ -179,22 +247,29 @@ func printRepo(path, hash string) {
 	}
 
 	if hash == "" {
-		out, _ := runCmd("git", "-C", path, "describe", "--always", "--abbrev=8")
+		out, _ := runCmd(gitPath, "-C", path, "describe", "--always", "--abbrev=10")
 		if len(out) == 0 {
-			return
+			return ""
 		}
 		hash = strings.TrimPrefix(out[0], "heads/")
 	}
 
 	if addr == path[7:] {
-		fmt.Println(boldBlueStar, path, boldAt, hash)
-	} else {
-		fmt.Println(boldBlueStar, addr, boldAt, hash, "→", path)
+		return fmt.Sprintf("%s %s %s", path, boldAt, hash)
 	}
+
+	return fmt.Sprintf("%s %s %s → %s", addr, boldAt, hash, path)
+
 }
 
 func runCmd(name string, args ...string) ([]string, error) {
-	out, err := exec.Command(name, args...).CombinedOutput()
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(cmd.Env, "LANG=C") // try to run the english version
+
+	if verbose {
+		verbosePrintf("%s %s", bold("Executing"), strings.Join(cmd.Args, " "))
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("%s", out)
 	}
@@ -209,4 +284,19 @@ func runCmd(name string, args ...string) ([]string, error) {
 	}
 
 	return lines, nil
+}
+
+func errPrintf(f string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, boldRedStar+" "+f+"\n", args...)
+}
+
+func printf(f string, args ...interface{}) {
+	fmt.Fprintf(os.Stdout, boldBlueStar+" "+f+"\n", args...)
+}
+
+func verbosePrintf(f string, args ...interface{}) {
+	if !verbose {
+		return
+	}
+	fmt.Fprintf(os.Stderr, boldYellowStar+" "+f+"\n", args...)
 }
