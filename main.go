@@ -23,6 +23,7 @@ var (
 	bold           = color.New(color.Bold).Sprint
 
 	verbose bool
+	dryRun  bool
 	gitPath string
 
 	app = cli.App{
@@ -43,7 +44,7 @@ var (
 						Name:    "branch",
 						Aliases: []string{"b"},
 						Value:   "master",
-						Usage:   "branch to checkout the repo as, defaults to master.",
+						Usage:   "branch to checkout the repo as, defaults to master",
 					},
 				},
 				Usage:  "adds or replaces a vendor package {git-repo}[@branch|tag|hash] [alias]",
@@ -52,7 +53,7 @@ var (
 			{
 				Name:    "update",
 				Aliases: []string{"up"},
-				Usage:   "updates a vendored package or all of them if non is specified.",
+				Usage:   "updates a vendored package or all of them if non is specified",
 				Action:  upSubModule,
 			},
 			{
@@ -66,12 +67,20 @@ var (
 			&cli.BoolFlag{
 				Name:        "verbose",
 				Aliases:     []string{"v"},
+				Usage:       "verbose output",
 				Destination: &verbose,
+			},
+			&cli.BoolFlag{
+				Name:        "dry-run",
+				Aliases:     []string{"n"},
+				Usage:       "dry-run, don't actually execute any git commands",
+				Destination: &dryRun,
 			},
 			&cli.StringFlag{
 				Name:        "git-path",
 				Aliases:     []string{"git"},
 				Value:       "git",
+				Usage:       "path to the git executable",
 				Destination: &gitPath,
 			},
 		},
@@ -101,7 +110,7 @@ func addSubModule(c *cli.Context) (err error) {
 	)
 
 	if path == "" {
-		return cli.Exit("add requires a package path.", 1)
+		return cli.Exit("add requires a package path", 1)
 	}
 
 	if idx := strings.LastIndex(path, "@"); idx > -1 {
@@ -125,12 +134,12 @@ func addSubModule(c *cli.Context) (err error) {
 		alias = alias[:len(alias)-3]
 	}
 
-	if _, err = runCmd(gitPath, "submodule", "add", "--depth", "1", "--force", path, alias); err != nil {
+	if _, err = runCmd(gitPath, "submodule", "add", "--force", path, alias); err != nil {
 		return cli.Exit(err, 2)
 	}
 
 	// TODO:
-	// if _, err = runCmd(gitPath, "config", "-f", ".gitmodules", "submodule."+path+".shallow", "true"); err != nil {
+	// if _, err = runCmd(gitPath, "config", "-f", ".gitmodules", "submodule"+path+".shallow", "true"); err != nil {
 	// 	return cli.Exit(err, 2)
 	// }
 
@@ -145,7 +154,7 @@ func addSubModule(c *cli.Context) (err error) {
 
 	// 	fmt.Printf("%s Successfully vendored %s as %s %s %s.\n", boldBlueStar, path, alias, boldAt, commit)
 	if s := repoString(alias, ""); s != "" {
-		printf("%s %s.", bold("Added"), s)
+		printf("%s %s", bold("Added"), s)
 	}
 	return
 }
@@ -161,14 +170,14 @@ func upSubModule(c *cli.Context) error {
 		}
 		if _, err := runCmd(gitPath, "-C", sm, "pull", "--prune"); err != nil {
 			if strings.Contains(err.Error(), "not currently on a branch") {
-				errPrintf("%s %s, not on a branch.", bold("Skipping"), sm[7:])
+				errPrintf("%s %s, not on a branch", bold("Skipping"), sm[7:])
 				continue
 			} else {
 				return cli.Exit(sm+" git pull failed: "+err.Error(), 2)
 			}
 		}
 		if s := repoString(sm, ""); s != "" {
-			printf("%s %s.", bold("Updated"), s)
+			printf("%s %s", bold("Updated"), s)
 		}
 	}
 	return nil
@@ -177,7 +186,7 @@ func upSubModule(c *cli.Context) error {
 func rmSubModule(c *cli.Context) error {
 	alias := c.Args().Get(0)
 	if alias == "" {
-		return cli.Exit("delete requires a package path.", 1)
+		return cli.Exit("delete requires a package path", 1)
 
 	}
 
@@ -193,18 +202,24 @@ func rmSubModule(c *cli.Context) error {
 		return cli.Exit(err, 2)
 	}
 
+	if dryRun {
+		return nil
+	}
 	// debug
 	if err := os.RemoveAll(filepath.Join(".git/modules/", alias)); err != nil {
 		return cli.Exit(err, 3)
+	} else {
+		verbosePrintf("%s .git/modules/%s", bold("Deleting"), alias)
 	}
 
 	if st, err := os.Stat(".gitmodules"); err == nil && st.Size() == 0 {
 		if err := os.Remove(".gitmodules"); err != nil {
 			return cli.Exit(err, 3)
 		}
+		verbosePrintf("%s .gitmodules because it was empty", bold("Deleting"))
 	}
 
-	printf("%s %s.", bold("Removed"), alias)
+	printf("%s %s", bold("Removed"), alias)
 	return nil
 }
 
@@ -230,7 +245,7 @@ func allSubModules() (sms []string) {
 }
 
 func submoduleURL(path string) string {
-	if out, _ := runCmd(gitPath, "config", "submodule."+path+".url"); len(out) == 1 {
+	if out, _ := runCmd(gitPath, "config", "submodule"+path+".url"); len(out) == 1 {
 		return out[0]
 	}
 	return ""
@@ -238,7 +253,7 @@ func submoduleURL(path string) string {
 
 func repoString(path, hash string) string {
 	addr := submoduleURL(path)
-	if addr == "" {
+	if addr == "" && !dryRun {
 		return ""
 	}
 
@@ -247,7 +262,7 @@ func repoString(path, hash string) string {
 	}
 
 	if hash == "" {
-		out, _ := runCmd(gitPath, "-C", path, "describe", "--always", "--abbrev=10")
+		out, _ := runCmd(gitPath, "-C", path, "describe", "--always", "--all", "--abbrev=10")
 		if len(out) == 0 {
 			return ""
 		}
@@ -266,8 +281,9 @@ func runCmd(name string, args ...string) ([]string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Env = append(cmd.Env, "LANG=C") // try to run the english version
 
-	if verbose {
-		verbosePrintf("%s %s", bold("Executing"), strings.Join(cmd.Args, " "))
+	verbosePrintf("%s %s", bold("Executing"), strings.Join(cmd.Args, " "))
+	if dryRun {
+		return nil, nil
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -295,7 +311,7 @@ func printf(f string, args ...interface{}) {
 }
 
 func verbosePrintf(f string, args ...interface{}) {
-	if !verbose {
+	if !verbose && !dryRun {
 		return
 	}
 	fmt.Fprintf(os.Stderr, boldYellowStar+" "+f+"\n", args...)
