@@ -12,7 +12,7 @@ import (
 
 	"github.com/fatih/color"
 
-	cli "github.com/OneOfOne/cli"
+	cli "gopkg.in/urfave/cli.v2"
 )
 
 var (
@@ -84,7 +84,9 @@ var (
 				Destination: &gitPath,
 			},
 		},
-		Action: cli.DefaultCommand("list"),
+		Action: func(ctx *cli.Context) error {
+			return ctx.App.Command("list").Run(ctx)
+		},
 	}
 )
 
@@ -245,7 +247,7 @@ func allSubModules() (sms []string) {
 }
 
 func submoduleURL(path string) string {
-	if out, _ := runCmd(gitPath, "config", "submodule"+path+".url"); len(out) == 1 {
+	if out, _ := runCmd(gitPath, "config", "submodule."+path+".url"); len(out) == 1 {
 		return out[0]
 	}
 	return ""
