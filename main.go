@@ -29,6 +29,7 @@ var (
 	app = cli.App{
 		Name:    "git-go-vendor",
 		Version: "v0.1",
+		Usage:   "Simple vendoring using git submodules.",
 		Commands: []*cli.Command{
 			{
 				Name:    "list",

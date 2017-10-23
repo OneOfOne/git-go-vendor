@@ -11,9 +11,9 @@ A "super" simple git sub command to use vendor go packages using git submodule (
 ## Usage
 
 ```
-➤ git go-vendor -h
+━➤ git go-vendor -h
 NAME:
-   git-go-vendor - A new cli application
+   git-go-vendor - Simple vendoring using git submodules.
 
 USAGE:
    git-go-vendor [global options] command [command options] [arguments...]
@@ -56,9 +56,10 @@ GLOBAL OPTIONS:
 ━➤ git commit -a -m 'xxh vendoring'
 
 ```
+
 ## FAQ
 
-### Why?
+### Why
 
 * Everything else is too complicated and depends on having the vendoring tool installed on the client.
 * Managing extra config files overcomplicates vendoring.
