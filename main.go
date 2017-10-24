@@ -11,11 +11,14 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
+	"github.com/mattn/go-colorable"
 
 	cli "gopkg.in/urfave/cli.v2"
 )
 
 var (
+	stdout         = colorable.NewColorableStdout()
+	stderr         = colorable.NewColorableStderr()
 	boldAt         = color.New(color.Bold, color.FgBlue).Sprint("@")
 	boldBlueStar   = color.New(color.Bold, color.FgBlue).Sprint("*")
 	boldYellowStar = color.New(color.Bold, color.FgYellow).Sprint("*")
@@ -306,16 +309,16 @@ func runCmd(name string, args ...string) ([]string, error) {
 }
 
 func errPrintf(f string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, boldRedStar+" "+f+"\n", args...)
+	fmt.Fprintf(stderr, boldRedStar+" "+f+"\n", args...)
 }
 
 func printf(f string, args ...interface{}) {
-	fmt.Fprintf(os.Stdout, boldBlueStar+" "+f+"\n", args...)
+	fmt.Fprintf(stdout, boldBlueStar+" "+f+"\n", args...)
 }
 
 func verbosePrintf(f string, args ...interface{}) {
 	if !verbose && !dryRun {
 		return
 	}
-	fmt.Fprintf(os.Stderr, boldYellowStar+" "+f+"\n", args...)
+	fmt.Fprintf(stderr, boldYellowStar+" "+f+"\n", args...)
 }
